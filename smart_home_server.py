@@ -11,6 +11,9 @@ from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
 import time
 from registry import DEVICES
 from devices import TV
+import subprocess
+import re
+import asyncio
 
 load_dotenv()
 
@@ -75,7 +78,7 @@ def save_tv_config():
     tv_configs = {}
     for room, devices in DEVICES.items():
         for device_name, device in devices.items():
-            if hasattr(device, 'ip_address'):  # It's a TV device
+            if hasattr(device, 'ip_address'):  # TV device
                 if room not in tv_configs:
                     tv_configs[room] = {}
                 tv_configs[room][device_name] = {
@@ -98,10 +101,8 @@ def save_state():
     with open(file_path, "w") as f:
         json.dump(state_dict, f, indent=2)
     
-    # Also save TV configurations
     save_tv_config()
 
-# Room name mapping to handle different variations
 ROOM_ALIASES = {
     "living room": "livingroom",
     "living_room": "livingroom", 
@@ -119,7 +120,6 @@ def normalize_room_name(room: str) -> str:
     room_lower = room.lower().strip()
     return ROOM_ALIASES.get(room_lower, room_lower)
 
-# --- Initialize TV Configurations on Startup ---
 def initialize_tv_configs():
     """Load TV configurations from file on server startup"""
     configs = load_tv_config()
@@ -129,7 +129,6 @@ def initialize_tv_configs():
         for room, devices in configs.items():
             normalized_room = normalize_room_name(room)
             
-            # Initialize room if it doesn't exist
             if normalized_room not in DEVICES:
                 DEVICES[normalized_room] = {}
             
@@ -138,24 +137,22 @@ def initialize_tv_configs():
                     ip_address = config["ip_address"]
                     port = config.get("port", 5555)
                     
-                    # Only add if device doesn't already exist
                     if device_name not in DEVICES[normalized_room]:
                         new_tv = TV(device_name, normalized_room, ip_address, port)
                         DEVICES[normalized_room][device_name] = new_tv
-                        print(f"✅ Loaded TV: {device_name} in {room} ({ip_address}:{port})")
+                        print(f"Loaded TV: {device_name} in {room} ({ip_address}:{port})")
                         
                 except Exception as e:
-                    print(f"❌ Error loading TV {device_name} in {room}: {e}")
+                    print(f"Error loading TV {device_name} in {room}: {e}")
     else:
         print("No TV configuration file found. Use add_tv_device() to configure TVs.")
 
-# Initialize TV configurations on startup
 initialize_tv_configs()
 
-# --- Tool: validate (required by WhatsApp agent) ---
+# --- Tool: validate (required by Puch) ---
 @mcp.tool
 async def validate() -> str:
-    """Validation tool required by WhatsApp agent for authentication."""
+    """Validation tool required by Puch for authentication."""
     return MY_NUMBER
 
 @mcp.tool()
@@ -231,9 +228,9 @@ def tv_volume_up(room: str, device_name: str) -> str:
             success = dev.volume_up()
             if success:
                 save_state()
-                return f"🔊 TV volume increased. Current volume: {dev.state['volume']}"
+                return f"TV volume increased. Current volume: {dev.state['volume']}"
             else:
-                return f"❌ Failed to increase TV volume. Connection issue."
+                return f"Failed to increase TV volume. Connection issue."
         return f"Device {device_name} is not a TV."
     return f"Device {device_name} not found in {room}."
 
@@ -247,9 +244,9 @@ def tv_volume_down(room: str, device_name: str) -> str:
             success = dev.volume_down()
             if success:
                 save_state()
-                return f"🔉 TV volume decreased. Current volume: {dev.state['volume']}"
+                return f"TV volume decreased. Current volume: {dev.state['volume']}"
             else:
-                return f"❌ Failed to decrease TV volume. Connection issue."
+                return f"Failed to decrease TV volume. Connection issue."
         return f"Device {device_name} is not a TV."
     return f"Device {device_name} not found in {room}."
 
@@ -264,9 +261,9 @@ def tv_mute(room: str, device_name: str) -> str:
             if success:
                 save_state()
                 mute_status = "muted" if dev.state['muted'] else "unmuted"
-                return f"🔇 TV is now {mute_status}."
+                return f"TV is now {mute_status}."
             else:
-                return f"❌ Failed to mute/unmute TV. Connection issue."
+                return f"Failed to mute/unmute TV. Connection issue."
         return f"Device {device_name} is not a TV."
     return f"Device {device_name} not found in {room}."
 
@@ -292,7 +289,7 @@ def tv_open_app(room: str, device_name: str, app: str) -> str:
             save_state()
             return f"{app_emoji} Opened {app} on TV."
         else:
-            return f"❌ Failed to open {app} on TV. Connection issue."
+            return f"Failed to open {app} on TV. Connection issue."
     return f"Device {device_name} not found in {room}."
 
 @mcp.tool()
@@ -310,9 +307,9 @@ def tv_navigate(room: str, device_name: str, direction: str) -> str:
         
         if success:
             save_state()
-            return f"📱 TV navigation: {direction} command sent."
+            return f"TV navigation: {direction} command sent."
         else:
-            return f"❌ Failed to send {direction} command to TV."
+            return f"Failed to send {direction} command to TV."
     return f"Device {device_name} not found in {room}."
 
 @mcp.tool()
@@ -324,9 +321,9 @@ def check_tv_connection(room: str, device_name: str) -> str:
         if hasattr(dev, 'check_connection'):
             is_connected = dev.check_connection()
             if is_connected:
-                return f"✅ TV connection is active. Status: {json.dumps(dev.state, indent=2)}"
+                return f"TV connection is active. Status: {json.dumps(dev.state, indent=2)}"
             else:
-                return f"❌ TV is not connected. Make sure TV is on, ADB is enabled, and IP is correct."
+                return f"TV is not connected. Make sure TV is on, ADB is enabled, and IP is correct."
         return f"Device {device_name} is not a TV."
     return f"Device {device_name} not found in {room}."
 
@@ -339,36 +336,30 @@ def add_tv_device(room: str, device_name: str, ip_address: str, port: int = 5555
     """
     normalized_room = normalize_room_name(room)
     
-    # Validate IP format (basic validation)
-    import re
+    
     ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
     if not re.match(ip_pattern, ip_address):
-        return f"❌ Invalid IP address format: {ip_address}"
+        return f"Invalid IP address format: {ip_address}"
     
-    # Validate port range
     if not (1 <= port <= 65535):
-        return f"❌ Invalid port number: {port}. Must be between 1-65535"
+        return f"Invalid port number: {port}. Must be between 1-65535"
     
-    # Initialize room if it doesn't exist
     if normalized_room not in DEVICES:
         DEVICES[normalized_room] = {}
     
-    # Check if device already exists
     if device_name in DEVICES[normalized_room]:
-        return f"❌ Device {device_name} already exists in {room}. Use update_tv_config to modify it."
+        return f"Device {device_name} already exists in {room}. Use update_tv_config to modify it."
     
-    # Create new TV device
     try:
         new_tv = TV(device_name, normalized_room, ip_address, port)
         DEVICES[normalized_room][device_name] = new_tv
         save_state()
         
-        # Check connection status
-        connection_status = "✅ Connected" if new_tv.check_connection() else "❌ Not connected"
+        connection_status = "Connected" if new_tv.check_connection() else "Not connected"
         
-        return f"✅ TV '{device_name}' added to {room} with IP {ip_address}:{port}. Status: {connection_status}"
+        return f"TV '{device_name}' added to {room} with IP {ip_address}:{port}. Status: {connection_status}"
     except Exception as e:
-        return f"❌ Failed to add TV device: {str(e)}"
+        return f"Failed to add TV device: {str(e)}"
 
 @mcp.tool()
 def update_tv_config(room: str, device_name: str, ip_address: str, port: int = 5555) -> str:
@@ -379,39 +370,33 @@ def update_tv_config(room: str, device_name: str, ip_address: str, port: int = 5
     normalized_room = normalize_room_name(room)
     
     if normalized_room not in DEVICES or device_name not in DEVICES[normalized_room]:
-        return f"❌ TV device {device_name} not found in {room}. Use add_tv_device to create it first."
+        return f"TV device {device_name} not found in {room}. Use add_tv_device to create it first."
     
-    # Validate IP format
-    import re
+    
     ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
     if not re.match(ip_pattern, ip_address):
-        return f"❌ Invalid IP address format: {ip_address}"
+        return f"Invalid IP address format: {ip_address}"
     
-    # Validate port range
     if not (1 <= port <= 65535):
-        return f"❌ Invalid port number: {port}. Must be between 1-65535"
+        return f"Invalid port number: {port}. Must be between 1-65535"
     
     try:
-        # Get existing device
         existing_tv = DEVICES[normalized_room][device_name]
         if not hasattr(existing_tv, 'ip_address'):
-            return f"❌ Device {device_name} is not a TV device."
+            return f"Device {device_name} is not a TV device."
         
-        # Update configuration
         old_config = f"{existing_tv.ip_address}:{existing_tv.port}"
         existing_tv.ip_address = ip_address
         existing_tv.port = port
         
-        # Reinitialize connection with new settings
         existing_tv._initialize_connection()
         save_state()
         
-        # Check connection status
-        connection_status = "✅ Connected" if existing_tv.check_connection() else "❌ Not connected"
+        connection_status = "Connected" if existing_tv.check_connection() else "Not connected"
         
-        return f"✅ TV '{device_name}' updated from {old_config} to {ip_address}:{port}. Status: {connection_status}"
+        return f"TV '{device_name}' updated from {old_config} to {ip_address}:{port}. Status: {connection_status}"
     except Exception as e:
-        return f"❌ Failed to update TV configuration: {str(e)}"
+        return f"Failed to update TV configuration: {str(e)}"
 
 @mcp.tool()
 def remove_tv_device(room: str, device_name: str) -> str:
@@ -421,19 +406,18 @@ def remove_tv_device(room: str, device_name: str) -> str:
     normalized_room = normalize_room_name(room)
     
     if normalized_room not in DEVICES or device_name not in DEVICES[normalized_room]:
-        return f"❌ TV device {device_name} not found in {room}."
+        return f"TV device {device_name} not found in {room}."
     
     device = DEVICES[normalized_room][device_name]
     if not hasattr(device, 'ip_address'):
-        return f"❌ Device {device_name} is not a TV device."
+        return f"Device {device_name} is not a TV device."
     
     try:
-        # Remove the device
         del DEVICES[normalized_room][device_name]
         save_state()
-        return f"✅ TV device '{device_name}' removed from {room}."
+        return f"TV device '{device_name}' removed from {room}."
     except Exception as e:
-        return f"❌ Failed to remove TV device: {str(e)}"
+        return f"Failed to remove TV device: {str(e)}"
 
 @mcp.tool()
 def list_tv_devices() -> str:
@@ -444,8 +428,8 @@ def list_tv_devices() -> str:
     
     for room, devices in DEVICES.items():
         for device_name, device in devices.items():
-            if hasattr(device, 'ip_address'):  # It's a TV device
-                connection_status = "✅ Connected" if device.check_connection() else "❌ Not connected"
+            if hasattr(device, 'ip_address'):  # TV device
+                connection_status = "Connected" if device.check_connection() else "Not connected"
                 tv_info = {
                     "room": room,
                     "name": device_name,
@@ -459,10 +443,10 @@ def list_tv_devices() -> str:
                 tv_devices.append(tv_info)
     
     if not tv_devices:
-        return "📺 No TV devices configured. Use add_tv_device to add one."
+        return "No TV devices configured. Use add_tv_device to add one."
     
-    import json
-    return f"📺 TV Devices:\n{json.dumps(tv_devices, indent=2)}"
+    
+    return f"TV Devices:\n{json.dumps(tv_devices, indent=2)}"
 
 @mcp.tool()
 def load_tv_configs_from_file() -> str:
@@ -483,7 +467,7 @@ def load_tv_configs_from_file() -> str:
     try:
         configs = load_tv_config()
         if not configs:
-            return f"📄 No TV configuration file found at {CONFIG_FILE}. Use add_tv_device to create TVs or manually create the config file."
+            return f"No TV configuration file found at {CONFIG_FILE}. Use add_tv_device to create TVs or manually create the config file."
         
         added_count = 0
         updated_count = 0
@@ -492,7 +476,6 @@ def load_tv_configs_from_file() -> str:
         for room, devices in configs.items():
             normalized_room = normalize_room_name(room)
             
-            # Initialize room if it doesn't exist
             if normalized_room not in DEVICES:
                 DEVICES[normalized_room] = {}
             
@@ -501,9 +484,7 @@ def load_tv_configs_from_file() -> str:
                     ip_address = config["ip_address"]
                     port = config.get("port", 5555)
                     
-                    # Check if device already exists
                     if device_name in DEVICES[normalized_room]:
-                        # Update existing device
                         existing_tv = DEVICES[normalized_room][device_name]
                         if hasattr(existing_tv, 'ip_address'):
                             existing_tv.update_connection_settings(ip_address, port)
@@ -511,7 +492,6 @@ def load_tv_configs_from_file() -> str:
                         else:
                             errors.append(f"Device {device_name} in {room} is not a TV")
                     else:
-                        # Create new TV device
                         new_tv = TV(device_name, normalized_room, ip_address, port)
                         DEVICES[normalized_room][device_name] = new_tv
                         added_count += 1
@@ -521,17 +501,17 @@ def load_tv_configs_from_file() -> str:
         
         save_state()
         
-        result = f"📺 TV Configuration loaded:\n"
-        result += f"✅ Added: {added_count} devices\n"
-        result += f"🔄 Updated: {updated_count} devices\n"
+        result = f"TV Configuration loaded:\n"
+        result += f"Added: {added_count} devices\n"
+        result += f"Updated: {updated_count} devices\n"
         
         if errors:
-            result += f"❌ Errors:\n" + "\n".join(f"  - {error}" for error in errors)
+            result += f"Errors:\n" + "\n".join(f"  - {error}" for error in errors)
         
         return result
         
     except Exception as e:
-        return f"❌ Failed to load TV configurations: {str(e)}"
+        return f"Failed to load TV configurations: {str(e)}"
 @mcp.tool()
 def tv_search_and_play(room: str, device_name: str, query: str, app: str = "netflix") -> str:
     """
@@ -546,9 +526,9 @@ def tv_search_and_play(room: str, device_name: str, query: str, app: str = "netf
             success = dev.search_and_play(query, app.lower())
             if success:
                 save_state()
-                return f"🎬 Searching and playing '{query}' on {app.title()}..."
+                return f"Searching and playing '{query}' on {app.title()}..."
             else:
-                return f"❌ Failed to search and play '{query}' on {app}. Connection issue."
+                return f"Failed to search and play '{query}' on {app}. Connection issue."
         return f"Device {device_name} does not support search and play functionality."
     return f"Device {device_name} not found in {room}."
 
@@ -565,9 +545,9 @@ def tv_search_content(room: str, device_name: str, query: str, app: str = "netfl
             success = dev.search_content(query, app.lower())
             if success:
                 save_state()
-                return f"🔍 Searching for '{query}' on {app.title()}. Use TV remote to select what to play."
+                return f"Searching for '{query}' on {app.title()}. Use TV remote to select what to play."
             else:
-                return f"❌ Failed to search for '{query}' on {app}. Connection issue."
+                return f"Failed to search for '{query}' on {app}. Connection issue."
         return f"Device {device_name} does not support search functionality."
     return f"Device {device_name} not found in {room}."
 
@@ -584,9 +564,9 @@ def tv_send_text(room: str, device_name: str, text: str) -> str:
             success = dev.send_text(text)
             if success:
                 save_state()
-                return f"⌨️ Sent text '{text}' to TV."
+                return f"Sent text '{text}' to TV."
             else:
-                return f"❌ Failed to send text to TV. Connection issue."
+                return f"Failed to send text to TV. Connection issue."
         return f"Device {device_name} does not support text input."
     return f"Device {device_name} not found in {room}."
 
@@ -603,83 +583,51 @@ def tv_press_key(room: str, device_name: str, key: str) -> str:
             success = dev.press_key(key.lower())
             if success:
                 save_state()
-                return f"🎮 Pressed '{key}' key on TV remote."
+                return f"Pressed '{key}' key on TV remote."
             else:
-                return f"❌ Failed to press '{key}' key. Connection issue."
+                return f"Failed to press '{key}' key. Connection issue."
         return f"Device {device_name} does not support key press functionality."
-    return f"Device {device_name} not found in {room}."
-
-@mcp.tool()
-def play_netflix_show(room: str, device_name: str, show_name: str) -> str:
-    """
-    Specifically play a show or movie on Netflix.
-    This is a convenience function that opens Netflix and searches for the content.
-    Examples: "Young Sheldon", "Stranger Things", "The Office"
-    """
-    normalized_room = normalize_room_name(room)
-    if normalized_room in DEVICES and device_name in DEVICES[normalized_room]:
-        dev = DEVICES[normalized_room][device_name]
-        
-        # First ensure Netflix is open
-        if hasattr(dev, 'open_netflix'):
-            netflix_success = dev.open_netflix()
-            if not netflix_success:
-                return f"❌ Failed to open Netflix. Make sure TV is connected."
-        
-        # Wait a moment for Netflix to load, then search
-        if hasattr(dev, 'search_and_play'):
-            success = dev.search_and_play(show_name, "netflix")
-            if success:
-                save_state()
-                return f"📺 Playing '{show_name}' on Netflix..."
-            else:
-                return f"❌ Failed to play '{show_name}' on Netflix. Try searching manually or check if the show is available."
-        
-        # Fallback: open Netflix and let user know to search manually
-        return f"📺 Netflix opened. Please use your TV remote to search for '{show_name}' or use tv_search_content tool."
-    
     return f"Device {device_name} not found in {room}."
 
 @mcp.tool()
 def play_youtube_video(room: str, device_name: str, search_query: str) -> str:
     """
     Search and play videos on YouTube TV with improved navigation.
-    Examples: "funny cats", "cooking tutorials", "Brooklyn 99 clips"
     """
     normalized_room = normalize_room_name(room)
     if normalized_room in DEVICES and device_name in DEVICES[normalized_room]:
         dev = DEVICES[normalized_room][device_name]
         
         if not hasattr(dev, 'ip_address'):
-            return f"❌ Device {device_name} is not a TV device."
+            return f"Device {device_name} is not a TV device."
         
         if not dev.check_connection():
-            return f"❌ Cannot connect to TV {device_name}. Please check connection."
+            return f"Cannot connect to TV {device_name}. Please check connection."
         
         try:
-            # Use the improved YouTube search method
+            # improved YouTube search method
             if hasattr(dev, 'open_youtube_and_search'):
                 success = dev.open_youtube_and_search(search_query)
                 if success:
                     save_state()
-                    return f"▶️ Successfully searched for '{search_query}' on YouTube!"
+                    return f"Successfully searched for '{search_query}' on YouTube!"
                 else:
-                    # Fallback message
+                    # Fallback
                     save_state()
-                    return f"▶️ YouTube is now open. The search for '{search_query}' may need manual selection due to YouTube TV interface limitations. Try:\n" \
+                    return f"YouTube is now open. The search for '{search_query}' may need manual selection due to YouTube TV interface limitations. Try:\n" \
                            f"1. Use your remote to navigate to the search icon (🔍) in the left sidebar\n" \
                            f"2. Type '{search_query}' using the on-screen keyboard\n" \
                            f"3. Select a video to play"
             else:
-                # Use the basic method
+                # basic method
                 youtube_success = dev.open_youtube()
                 if youtube_success:
-                    return f"▶️ YouTube opened. Please manually search for '{search_query}' using your TV remote."
+                    return f"YouTube opened. Please manually search for '{search_query}' using your TV remote."
                 else:
-                    return f"❌ Failed to open YouTube. Make sure YouTube app is installed."
+                    return f"Failed to open YouTube. Make sure YouTube app is installed."
                     
         except Exception as e:
-            return f"❌ Error playing YouTube video: {str(e)}"
+            return f"Error playing YouTube video: {str(e)}"
     
     return f"Device {device_name} not found in {room}."
 
@@ -694,22 +642,20 @@ def youtube_voice_search_workaround(room: str, device_name: str, search_query: s
         dev = DEVICES[normalized_room][device_name]
         
         if not hasattr(dev, 'ip_address'):
-            return f"❌ Device {device_name} is not a TV device."
+            return f"Device {device_name} is not a TV device."
         
         try:
-            # Open YouTube first
             if not dev.open_youtube():
-                return f"❌ Failed to open YouTube."
+                return f"Failed to open YouTube."
             
             time.sleep(4)
             
-            # Trigger voice search
             dev._send_adb_command("input keyevent KEYCODE_SEARCH")
             
-            return f"🎤 Voice search activated on YouTube! Please say '{search_query}' into your TV remote or use the on-screen keyboard that should appear."
+            return f"Voice search activated on YouTube! Please say '{search_query}' into your TV remote or use the on-screen keyboard that should appear."
             
         except Exception as e:
-            return f"❌ Error with voice search: {str(e)}"
+            return f"Error with voice search: {str(e)}"
     
     return f"Device {device_name} not found in {room}."
 
@@ -725,7 +671,7 @@ def youtube_navigate_and_play(room: str, device_name: str, direction: str = "dow
         dev = DEVICES[normalized_room][device_name]
         
         if not hasattr(dev, 'ip_address'):
-            return f"❌ Device {device_name} is not a TV device."
+            return f"Device {device_name} is not a TV device."
         
         try:
             direction_map = {
@@ -740,18 +686,18 @@ def youtube_navigate_and_play(room: str, device_name: str, direction: str = "dow
             }
             
             if direction.lower() not in direction_map:
-                return f"❌ Invalid direction. Use: {list(direction_map.keys())}"
+                return f"Invalid direction. Use: {list(direction_map.keys())}"
             
             success_count = 0
             for i in range(steps):
                 if dev._send_adb_command(f"input keyevent {direction_map[direction.lower()]}"):
                     success_count += 1
-                    time.sleep(0.5)  # Small delay between commands
+                    time.sleep(0.5)  # delay between commands
             
-            return f"📱 Successfully sent {success_count}/{steps} '{direction}' commands to YouTube."
+            return f"Successfully sent {success_count}/{steps} '{direction}' commands to YouTube."
             
         except Exception as e:
-            return f"❌ Navigation error: {str(e)}"
+            return f"Navigation error: {str(e)}"
     
     return f"Device {device_name} not found in {room}."
 
@@ -764,17 +710,15 @@ def play_netflix_show(room: str, device_name: str, show_name: str) -> str:
     normalized_room = normalize_room_name(room)
     
     if normalized_room not in DEVICES or device_name not in DEVICES[normalized_room]:
-        return f"❌ Device {device_name} not found in {room}. Available devices: {list(DEVICES.get(normalized_room, {}).keys())}"
+        return f"Device {device_name} not found in {room}. Available devices: {list(DEVICES.get(normalized_room, {}).keys())}"
     
     dev = DEVICES[normalized_room][device_name]
     
-    # Check if it's actually a TV
     if not hasattr(dev, 'ip_address'):
-        return f"❌ Device {device_name} is not a TV device."
+        return f"Device {device_name} is not a TV device."
     
-    # Check connection first
     if not dev.check_connection():
-        return f"❌ Cannot connect to TV {device_name}. Please check:\n" \
+        return f"Cannot connect to TV {device_name}. Please check:\n" \
                f"• TV is powered on\n" \
                f"• Developer options enabled\n" \
                f"• USB debugging enabled\n" \
@@ -784,35 +728,33 @@ def play_netflix_show(room: str, device_name: str, show_name: str) -> str:
     try:
         print(f"Attempting to play '{show_name}' on Netflix...")
         
-        # Step 1: Open Netflix
+        
         print("Opening Netflix...")
         netflix_success = dev.open_netflix()
         if not netflix_success:
-            return f"❌ Failed to open Netflix on {device_name}. Make sure Netflix app is installed."
+            return f"Failed to open Netflix on {device_name}. Make sure Netflix app is installed."
         
-        # Step 2: Search and play
+        # Search and play
         print(f"Searching for '{show_name}'...")
         if hasattr(dev, 'search_and_play'):
             search_success = dev.search_and_play(show_name, "netflix")
             if search_success:
                 save_state()
-                return f"🎬 Successfully initiated playback of '{show_name}' on Netflix! The show should start playing shortly."
+                return f"Successfully initiated playback of '{show_name}' on Netflix! The show should start playing shortly."
             else:
-                # Fallback: just open Netflix and provide instructions
+                # Fallback
                 save_state()
-                return f"📺 Netflix is now open on {device_name}. I attempted to search for '{show_name}' but it may need manual selection. Try using your TV remote to:\n" \
+                return f"Netflix is now open on {device_name}. I attempted to search for '{show_name}' but it may need manual selection. Try using your TV remote to:\n" \
                        f"1. Navigate to the search icon (🔍)\n" \
                        f"2. Type '{show_name}'\n" \
                        f"3. Select the show to play"
         else:
-            # Device doesn't support search - just open Netflix
             save_state() 
-            return f"📺 Netflix opened on {device_name}. Your TV doesn't support automatic search yet. Please manually search for '{show_name}' using your remote."
+            return f"Netflix opened on {device_name}. Your TV doesn't support automatic search yet. Please manually search for '{show_name}' using your remote."
             
     except Exception as e:
-        return f"❌ Unexpected error while trying to play '{show_name}': {str(e)}"
+        return f"Unexpected error while trying to play '{show_name}': {str(e)}"
 
-# Also add a diagnostic tool to help troubleshoot TV connections
 @mcp.tool()
 def diagnose_tv_connection(room: str, device_name: str) -> str:
     """
@@ -821,64 +763,60 @@ def diagnose_tv_connection(room: str, device_name: str) -> str:
     normalized_room = normalize_room_name(room)
     
     if normalized_room not in DEVICES or device_name not in DEVICES[normalized_room]:
-        return f"❌ Device {device_name} not found in {room}."
+        return f"Device {device_name} not found in {room}."
     
     dev = DEVICES[normalized_room][device_name]
     
     if not hasattr(dev, 'ip_address'):
-        return f"❌ Device {device_name} is not a TV device."
+        return f"Device {device_name} is not a TV device."
     
     results = []
-    results.append(f"🔍 Diagnosing TV: {device_name} in {room}")
-    results.append(f"📍 IP Address: {dev.ip_address}:{dev.port}")
+    results.append(f"Diagnosing TV: {device_name} in {room}")
+    results.append(f"IP Address: {dev.ip_address}:{dev.port}")
     
-    # Test 1: Basic connectivity
-    import subprocess
     try:
         ping_result = subprocess.run(f"ping -c 1 -W 3 {dev.ip_address}", 
                                    shell=True, capture_output=True, timeout=5)
         if ping_result.returncode == 0:
-            results.append("✅ Network connectivity: OK")
+            results.append("Network connectivity: OK")
         else:
-            results.append("❌ Network connectivity: FAILED - TV not reachable")
+            results.append("Network connectivity: FAILED - TV not reachable")
             return "\n".join(results)
     except:
-        results.append("⚠️  Network connectivity: Could not test")
+        results.append("Network connectivity: Could not test")
     
-    # Test 2: ADB connection
     try:
         adb_result = subprocess.run(f"adb connect {dev.ip_address}:{dev.port}", 
                                   shell=True, capture_output=True, timeout=10)
         if "connected" in adb_result.stdout.decode().lower():
-            results.append("✅ ADB connection: OK") 
+            results.append("ADB connection: OK") 
         else:
-            results.append(f"❌ ADB connection: FAILED - {adb_result.stdout.decode().strip()}")
+            results.append(f"ADB connection: FAILED - {adb_result.stdout.decode().strip()}")
     except:
-        results.append("❌ ADB connection: ERROR - ADB not installed or accessible")
+        results.append("ADB connection: ERROR - ADB not installed or accessible")
     
-    # Test 3: Device responsiveness
     if dev.check_connection():
-        results.append("✅ Device responsiveness: OK")
+        results.append("Device responsiveness: OK")
     else:
-        results.append("❌ Device responsiveness: FAILED")
+        results.append("Device responsiveness: FAILED")
     
-    # Test 4: App availability
     try:
         netflix_test = subprocess.run(f"adb -s {dev.ip_address}:{dev.port} shell pm list packages | grep netflix", 
                                     shell=True, capture_output=True, timeout=10)
         if netflix_test.returncode == 0 and netflix_test.stdout:
-            results.append("✅ Netflix app: Installed")
+            results.append("Netflix app: Installed")
         else:
-            results.append("⚠️  Netflix app: Not found or not accessible")
+            results.append("Netflix app: Not found or not accessible")
     except:
-        results.append("⚠️  Netflix app: Could not verify")
+        results.append("Netflix app: Could not verify")
     
     return "\n".join(results)
+
 # --- Run MCP Server ---
 async def main():
     print(f"Starting Smart Home MCP server on http://0.0.0.0:8002")
     await mcp.run_async("streamable-http", host="0.0.0.0", port=8002)
 
 if __name__ == "__main__":
-    import asyncio
+    
     asyncio.run(main())
