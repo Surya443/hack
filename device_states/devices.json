@@ -1,0 +1,124 @@
+{
+  "kitchen": {
+    "light1": {
+      "name": "light1",
+      "type": "light",
+      "room": "kitchen",
+      "state": {
+        "power": "OFF",
+        "brightness": 0
+      }
+    },
+    "light2": {
+      "name": "light2",
+      "type": "light",
+      "room": "kitchen",
+      "state": {
+        "power": "OFF",
+        "brightness": 0
+      }
+    },
+    "chimney": {
+      "name": "chimney",
+      "type": "chimney",
+      "room": "kitchen",
+      "state": {
+        "power": "OFF",
+        "mode": "OFF"
+      }
+    }
+  },
+  "livingroom": {
+    "light3": {
+      "name": "light3",
+      "type": "light",
+      "room": "livingroom",
+      "state": {
+        "power": "OFF",
+        "brightness": 0
+      }
+    },
+    "light4": {
+      "name": "light4",
+      "type": "light",
+      "room": "livingroom",
+      "state": {
+        "power": "OFF",
+        "brightness": 0
+      }
+    },
+    "light5": {
+      "name": "light5",
+      "type": "light",
+      "room": "livingroom",
+      "state": {
+        "power": "OFF",
+        "brightness": 0
+      }
+    },
+    "fan1": {
+      "name": "fan1",
+      "type": "fan",
+      "room": "livingroom",
+      "state": {
+        "power": "OFF",
+        "speed": 0
+      }
+    },
+    "Bedroom tv": {
+      "name": "Bedroom tv",
+      "room": "livingroom",
+      "type": "tv",
+      "ip_address": "192.168.1.12",
+      "port": 5555,
+      "state": {
+        "power": "off",
+        "volume": 50,
+        "muted": false,
+        "current_app": "home"
+      }
+    },
+    "tv": {
+      "name": "tv",
+      "room": "livingroom",
+      "type": "tv",
+      "ip_address": "192.168.1.12",
+      "port": 5555,
+      "state": {
+        "power": "off",
+        "volume": 50,
+        "muted": false,
+        "current_app": "netflix"
+      }
+    }
+  },
+  "bedroom": {
+    "ac1": {
+      "name": "ac1",
+      "type": "ac",
+      "room": "bedroom",
+      "state": {
+        "power": "OFF",
+        "temperature": 24
+      }
+    },
+    "fan2": {
+      "name": "fan2",
+      "type": "fan",
+      "room": "bedroom",
+      "state": {
+        "power": "OFF",
+        "speed": 0
+      }
+    },
+    "light76": {
+      "name": "light76",
+      "type": "light",
+      "room": "bedroom",
+      "state": {
+        "power": "OFF",
+        "brightness": 0
+      }
+    }
+  }
+}
